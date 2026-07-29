@@ -389,7 +389,7 @@
     #energy-level-toggle { padding: 2px !important; }
 
     .view-toggle {
-        position: fixed;
+        position: absolute;
         top: 12px;
         left: 12px;
         z-index: 2000;
@@ -1392,6 +1392,7 @@
         let lastRemovedBook = null;
         let lastRemovedIndex = -1;
         let lastRemovedFromListKey = '';
+        let lastRemovalWasComplete = false;
         let selectedBookIndexInGlobal = -1;
         let selectedBookGlobalListKey = '';
         let currentRotation = 0;
@@ -1611,6 +1612,7 @@
             lastRemovedBook = null;
             lastRemovedIndex = -1;
             lastRemovedFromListKey = '';
+            lastRemovalWasComplete = false;
             document.getElementById('undo-btn').style.display = 'none';
 
             currentFilterTags = [];
@@ -2456,7 +2458,7 @@
 
         function directDelete(globalIndex) { executeRemoval(globalIndex, getListKey()); }
 
-        function executeRemoval(index, listKeyContext) {
+        function executeRemoval(index, listKeyContext, isComplete = false) {
             let list;
             const targetKey = listKeyContext || getListKey();
             if (targetKey === 'new_books') list = tbrList;
@@ -2470,13 +2472,14 @@
             lastRemovedBook = list[index]; 
             lastRemovedIndex = index;
             lastRemovedFromListKey = targetKey;
+            lastRemovalWasComplete = isComplete;
 
             list.splice(index, 1);
             saveAllToStorage(); 
             updateFilters();
             document.getElementById('undo-btn').style.display = 'block';
 
-            if (targetKey === 'new_books' || targetKey === 'reading_books') {
+            if (isComplete) {
                 incrementYearlyGoalTally();
             }
         }
@@ -2497,7 +2500,7 @@
                 updateFilters();
                 document.getElementById('undo-btn').style.display = 'none';
 
-                if (lastRemovedFromListKey === 'new_books' || lastRemovedFromListKey === 'reading_books') {
+                if (lastRemovalWasComplete) {
                     decrementYearlyGoalTally();
                 }
             }
@@ -2590,7 +2593,7 @@
             const idx = editingItemIndex;
             if (idx === -1) return;
             closeEditModal();
-            executeRemoval(idx, 'reading_books');
+            executeRemoval(idx, 'reading_books', true);
         }
 
         function closeEditModal() { document.getElementById('edit-modal-overlay').classList.remove('active'); }
