@@ -1361,7 +1361,109 @@
         </div>
     </div>
 
+    <!-- Firebase: lets this app sync your data live across every device/browser. -->
+    <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
     <script>
+        // ============================================================
+        // FIREBASE SYNC
+        // ============================================================
+        // 1. Go to https://console.firebase.google.com, create a free project.
+        // 2. In the project, click "Build > Realtime Database" and create a database
+        //    (start in "test mode" is fine for a personal single-user app).
+        // 3. Click the gear icon > Project settings > scroll to "Your apps" > click
+        //    the </> (web) icon to register a web app. It will show you a config
+        //    object like the one below — copy your real values in here.
+        const firebaseConfig = {
+            apiKey: "AIzaSyBVrwFO3td4EWA-krxGH-dl6Hw0wwe4nH0",
+            authDomain: "tbr-wheel.firebaseapp.com",
+            databaseURL: "https://tbr-wheel-default-rtdb.firebaseio.com",
+            projectId: "tbr-wheel",
+            storageBucket: "tbr-wheel.firebasestorage.app",
+            messagingSenderId: "357091296526",
+            appId: "1:357091296526:web:f8bd789ea5b5f79650435f"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const fbDb = firebase.database();
+        const fbDataRef = fbDb.ref('appData');
+
+        let firebaseReady = false;   // becomes true once we've received the first snapshot
+        let applyingRemoteUpdate = false; // guards against feedback loops
+        let fbSyncTimer = null;
+
+        // Bundles all "content" state (as opposed to per-device UI prefs like last
+        // tab open) into one object — the single source of truth in Firebase.
+        function collectSyncableState() {
+            return {
+                books: tbrList,
+                movies: movieList,
+                games: gameList,
+                readingBooks: readingBooksList,
+                readingMovies: readingMoviesList,
+                playingGames: playingGamesList,
+                goals: goalsData,
+                yearlyGoal: yearlyGoal
+            };
+        }
+
+        // Debounced push to Firebase, called from every local save function.
+        function scheduleFirebaseSync() {
+            if (applyingRemoteUpdate) return; // don't echo back a remote update we just applied
+            clearTimeout(fbSyncTimer);
+            fbSyncTimer = setTimeout(() => {
+                fbDataRef.set(collectSyncableState()).catch(err => {
+                    console.error('Firebase sync failed:', err);
+                });
+            }, 400);
+        }
+
+        // Applies a snapshot from Firebase to local state and re-renders everything.
+        function applyRemoteState(data) {
+            if (!data) return;
+            applyingRemoteUpdate = true;
+            if (data.books) tbrList = data.books;
+            if (data.movies) movieList = data.movies;
+            if (data.games) gameList = data.games;
+            if (data.readingBooks) readingBooksList = data.readingBooks;
+            if (data.readingMovies) readingMoviesList = data.readingMovies;
+            if (data.playingGames) playingGamesList = data.playingGames;
+            if (data.goals) goalsData = data.goals;
+            if (data.yearlyGoal) yearlyGoal = data.yearlyGoal;
+
+            // Keep localStorage as an offline fallback cache
+            saveAllToStorage();
+
+            refreshAllUI();
+            applyingRemoteUpdate = false;
+        }
+
+        // Starts listening for live changes from any other device/tab.
+        function initFirebaseSync() {
+            fbDataRef.on('value', snapshot => {
+                const data = snapshot.val();
+                if (!firebaseReady) {
+                    // First load: if Firebase already has data, it wins over whatever
+                    // was loaded from localStorage. If Firebase is empty (brand new
+                    // database), push up whatever we loaded locally so it becomes
+                    // the shared copy.
+                    firebaseReady = true;
+                    if (data) {
+                        applyRemoteState(data);
+                    } else {
+                        scheduleFirebaseSync();
+                    }
+                    return;
+                }
+                applyRemoteState(data);
+            }, err => {
+                console.error('Firebase listener error (check your firebaseConfig and database rules):', err);
+            });
+        }
+        // ============================================================
+        // END FIREBASE SYNC
+        // ============================================================
+
         function enforceMin(e) {
             let val = e.target.value;
             if (val < 0) {
@@ -1497,18 +1599,30 @@
                 currentListMode = lastListMode;
             }
 
-            buildFilterDropdown();
-            buildFormTagPool();
-            populateGenreSuggestions();
-            populateGenreFilterDropdown();
-            updateFilters();
-            applyModeUI();
+            refreshAllUI();
 
             // Restore Goals Mode if it was last active
             const lastGoalsMode = localStorage.getItem('lastGoalsMode');
             if (lastGoalsMode === '1') {
                 toggleGoalsMode();
             }
+
+            // Start listening for live updates from other devices/tabs
+            initFirebaseSync();
+        }
+
+        // Re-renders every part of the UI that depends on the synced data.
+        // Called on initial load, and again whenever a live update arrives
+        // from Firebase (i.e. you changed something on another device).
+        function refreshAllUI() {
+            buildFilterDropdown();
+            buildFormTagPool();
+            populateGenreSuggestions();
+            populateGenreFilterDropdown();
+            updateFilters();
+            applyModeUI();
+            renderGoals();
+            renderYearlyGoalCard();
         }
 
         function switchMode(mode) {
@@ -1923,6 +2037,7 @@
             localStorage.setItem(storageKeys.reading_games, JSON.stringify(playingGamesList));
             localStorage.setItem(GOALS_STORAGE_KEY, JSON.stringify(goalsData));
             localStorage.setItem(YEARLY_GOAL_STORAGE_KEY, JSON.stringify(yearlyGoal));
+            scheduleFirebaseSync();
         }
 
         function importData(event) {
@@ -2028,7 +2143,7 @@
             }
         }
 
-        function saveToStorage() { localStorage.setItem(storageKeys[getListKey()], JSON.stringify(getActiveList())); }
+        function saveToStorage() { localStorage.setItem(storageKeys[getListKey()], JSON.stringify(getActiveList())); scheduleFirebaseSync(); }
         function getTags(vibeStr) { return (vibeStr || '').split(',').map(tag => tag.trim()).filter(tag => tag.length > 0); }
 
         function getAllGenres() {
@@ -2832,6 +2947,7 @@
 
         function saveGoals() {
             localStorage.setItem(GOALS_STORAGE_KEY, JSON.stringify(goalsData));
+            scheduleFirebaseSync();
         }
 
         // ============================================================
@@ -2857,6 +2973,7 @@
 
         function saveYearlyGoalData() {
             localStorage.setItem(YEARLY_GOAL_STORAGE_KEY, JSON.stringify(yearlyGoal));
+            scheduleFirebaseSync();
         }
 
         // Rolls the weekly tally over if we've crossed into a new week
